@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+  <body>
+    <h1>Clube de Leitura</h1>
+    <button onclick="perguntar()">Pergunta ao coach</button>
+
+    <script>
+      async function perguntar() {
+        const pergunta = prompt("Faz uma pergunta:");
+        
+        const res = await fetch("/.netlify/functions/fitness-chat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ message: pergunta })
+        });
+
+        const data = await res.json();
+        alert(data.reply);
+      }
+    </script>
+  </body>
+</html>
