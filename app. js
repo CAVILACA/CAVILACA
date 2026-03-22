@@ -1,0 +1,230 @@
+const STORAGE_KEY = "clube_leitura_books_v1";
+
+let books = loadBooks();
+let selectedBookId = null;
+
+const form = document.getElementById("book-form");
+const booksList = document.getElementById("books-list");
+const searchInput = document.getElementById("search");
+const detailCard = document.getElementById("detail-card");
+const detailTitle = document.getElementById("detail-title");
+const detailMeta = document.getElementById("detail-meta");
+const detailNotes = document.getElementById("detail-notes");
+const synopsisSource = document.getElementById("synopsis-source");
+const synopsisOutput = document.getElementById("synopsis-output");
+const questionInput = document.getElementById("question-input");
+const qaList = document.getElementById("qa-list");
+
+form.addEventListener("submit", onSaveBook);
+searchInput.addEventListener("input", renderBooks);
+document.getElementById("close-detail").addEventListener("click", closeDetail);
+document.getElementById("generate-synopsis").addEventListener("click", onGenerateSynopsis);
+document.getElementById("ask-question").addEventListener("click", onAskQuestion);
+
+renderBooks();
+
+function loadBooks() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+  } catch {
+    return [];
+  }
+}
+
+function saveBooks() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(books));
+}
+
+function onSaveBook(event) {
+  event.preventDefault();
+
+  const newBook = {
+    id: crypto.randomUUID(),
+    title: document.getElementById("title").value.trim(),
+    author: document.getElementById("author").value.trim(),
+    startDate: document.getElementById("startDate").value,
+    endDate: document.getElementById("endDate").value,
+    status: document.getElementById("status").value,
+    rating: document.getElementById("rating").value,
+    notes: document.getElementById("notes").value.trim(),
+    synopsis: "",
+    qa: []
+  };
+
+  books.unshift(newBook);
+  saveBooks();
+  form.reset();
+  renderBooks();
+}
+
+function renderBooks() {
+  const q = searchInput.value.trim().toLowerCase();
+  const filtered = books.filter(book => {
+    return [book.title, book.author].join(" ").toLowerCase().includes(q);
+  });
+
+  booksList.innerHTML = "";
+
+  if (!filtered.length) {
+    booksList.innerHTML = `<p class="book-status">Sem livros registados.</p>`;
+    return;
+  }
+
+  const template = document.getElementById("book-item-template");
+
+  filtered.forEach(book => {
+    const clone = template.content.cloneNode(true);
+    clone.querySelector(".book-title").textContent = book.title || "Sem título";
+    clone.querySelector(".book-author").textContent = book.author ? `Autor: ${book.author}` : "Autor não indicado";
+    clone.querySelector(".book-status").textContent = `Estado: ${humanStatus(book.status)}${book.rating ? ` • Nota: ${book.rating}/10` : ""}`;
+    clone.querySelector(".open-book").addEventListener("click", () => openBook(book.id));
+    clone.querySelector(".delete-book").addEventListener("click", () => deleteBook(book.id));
+    booksList.appendChild(clone);
+  });
+}
+
+function humanStatus(status) {
+  if (status === "terminado") return "Terminado";
+  if (status === "pausado") return "Pausado";
+  return "A ler";
+}
+
+function openBook(bookId) {
+  selectedBookId = bookId;
+  const book = books.find(b => b.id === bookId);
+  if (!book) return;
+
+  detailCard.classList.remove("hidden");
+  detailTitle.textContent = book.title;
+  detailMeta.textContent = [
+    book.author ? `Autor: ${book.author}` : "",
+    book.startDate ? `Início: ${book.startDate}` : "",
+    book.endDate ? `Fim: ${book.endDate}` : "",
+    `Estado: ${humanStatus(book.status)}`,
+    book.rating ? `Nota: ${book.rating}/10` : ""
+  ].filter(Boolean).join(" • ");
+
+  detailNotes.textContent = book.notes || "Sem notas.";
+  synopsisSource.value = book.notes || "";
+  synopsisOutput.textContent = book.synopsis || "Ainda sem sinopse.";
+  renderQa(book);
+}
+
+function closeDetail() {
+  detailCard.classList.add("hidden");
+  selectedBookId = null;
+}
+
+function deleteBook(bookId) {
+  if (!confirm("Apagar este livro do histórico?")) return;
+  books = books.filter(book => book.id !== bookId);
+  saveBooks();
+  if (selectedBookId === bookId) closeDetail();
+  renderBooks();
+}
+
+async function onGenerateSynopsis() {
+  const book = getSelectedBook();
+  if (!book) return;
+
+  const source = synopsisSource.value.trim();
+  if (!source) {
+    synopsisOutput.textContent = "Escreve ou cola primeiro notas/excerto curto para gerar a sinopse.";
+    return;
+  }
+
+  synopsisOutput.textContent = "A gerar sinopse...";
+
+  try {
+    const result = await callAssistant({
+      action: "synopsis",
+      title: book.title,
+      author: book.author,
+      source
+    });
+
+    book.synopsis = result.reply;
+    saveBooks();
+    synopsisOutput.textContent = result.reply;
+  } catch (error) {
+    synopsisOutput.textContent = `Erro: ${error.message}`;
+  }
+}
+
+async function onAskQuestion() {
+  const book = getSelectedBook();
+  if (!book) return;
+
+  const question = questionInput.value.trim();
+  if (!question) return;
+
+  const placeholder = { question, answer: "A pensar..." };
+  book.qa.unshift(placeholder);
+  saveBooks();
+  renderQa(book);
+  questionInput.value = "";
+
+  try {
+    const result = await callAssistant({
+      action: "qa",
+      title: book.title,
+      author: book.author,
+      notes: book.notes,
+      synopsis: book.synopsis,
+      question
+    });
+
+    placeholder.answer = result.reply;
+    saveBooks();
+    renderQa(book);
+  } catch (error) {
+    placeholder.answer = `Erro: ${error.message}`;
+    saveBooks();
+    renderQa(book);
+  }
+}
+
+function renderQa(book) {
+  qaList.innerHTML = "";
+
+  if (!book.qa?.length) {
+    qaList.innerHTML = `<p class="book-status">Ainda sem perguntas.</p>`;
+    return;
+  }
+
+  book.qa.forEach(item => {
+    const div = document.createElement("div");
+    div.className = "qa-item";
+    div.innerHTML = `<strong>P:</strong> ${escapeHtml(item.question)}<br><br><strong>R:</strong> ${escapeHtml(item.answer)}`;
+    qaList.appendChild(div);
+  });
+}
+
+function getSelectedBook() {
+  return books.find(book => book.id === selectedBookId);
+}
+
+async function callAssistant(payload) {
+  const response = await fetch("/.netlify/functions/book-assistant", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || "Falha na ligação ao assistente.");
+  }
+
+  return data;
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
